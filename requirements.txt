@@ -4,3 +4,4 @@ pymongo
 joblib
 numpy
 pandas
+python-dotenv
