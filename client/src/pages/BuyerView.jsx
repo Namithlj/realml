@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
-import PropertyCard from "./PropertyCard";
+import PropertyCard from "../components/PropertyCard";
+
 
 export default function BuyerView() {
   const [properties, setProperties] = useState([]);
