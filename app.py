@@ -4,6 +4,7 @@ from pymongo import MongoClient
 import joblib
 import os
 from random import uniform, randint, choice
+from urllib.parse import quote_plus
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -13,26 +14,23 @@ app = Flask(__name__)
 CORS(app)
 
 # MongoDB connection
-mongo_uri = os.environ.get("MONGO_URI")
-client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+db_user = os.environ.get("MONGO_USER")  # e.g., 'namith'
+db_pass = os.environ.get("MONGO_PASS")  # e.g., 'Namith@0'
+db_name = os.environ.get("MONGO_DB")    # e.g., 'realml'
 
-try:
-    client.server_info()  # Check connection
-    print("✅ MongoDB connected successfully")
-except Exception as e:
-    print("❌ MongoDB connection failed:", e)
-
-db = client.realml
+mongo_uri = f"mongodb+srv://{db_user}:{quote_plus(db_pass)}@realml.notixq1.mongodb.net/{db_name}?retryWrites=true&w=majority&appName=Realml"
+client = MongoClient(mongo_uri)
+db = client[db_name]
 properties_collection = db.properties
 
-# Seed demo data
+# Seed demo data if empty
 def seed_demo_data():
     if properties_collection.count_documents({}) == 0:
         demo_locations = ["Bangalore", "Chennai", "Hyderabad", "Pune", "Mumbai"]
         for _ in range(5):
             features = {f: round(uniform(0, 10), 2) for f in 
                 ["CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS","RAD","TAX","PTRATIO","B","LSTAT"]}
-            features["CHAS"] = choice([0,1])
+            features["CHAS"] = choice([0, 1])
             expected = round(uniform(100000, 500000), 2)
             predicted = round(expected * uniform(0.8, 1.2), 2)
             doc = {
@@ -50,65 +48,56 @@ def seed_demo_data():
     else:
         print("ℹ️ Database already contains properties; skipping seeding.")
 
+# Call during startup
 seed_demo_data()
 
 # Load ML model
-try:
-    model = joblib.load("ml/model.pkl")
-    print("✅ ML model loaded successfully")
-except Exception as e:
-    print("❌ Failed to load ML model:", e)
-    model = None
+model = joblib.load("ml/model.pkl")  # Ensure this file exists
 
 @app.route("/")
 def home():
     return "🏠 RealEstateML Flask Backend Running!"
 
-# Add property
 @app.route("/add", methods=["POST"])
 def add_property():
-    if not model or not properties_collection:
-        return jsonify({"error": "Backend not ready"}), 503
-
     data = request.get_json()
-    required_fields = ["sellerName","email","phone","location",
-                       "CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS",
-                       "RAD","TAX","PTRATIO","B","LSTAT","expectedPrice"]
+    required_fields = [
+        "sellerName", "email", "phone", "location",
+        "CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS",
+        "RAD","TAX","PTRATIO","B","LSTAT","expectedPrice"
+    ]
 
+    # Check for missing fields
     for f in required_fields:
         if f not in data:
             return jsonify({"error": f"Missing field: {f}"}), 400
 
     try:
-        features = [float(data[f]) for f in ["CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS",
-                                             "RAD","TAX","PTRATIO","B","LSTAT"]]
+        # Convert to floats for ML
+        features = [float(data[f]) for f in required_fields[4:]]
         predicted_price = float(model.predict([features])[0])
-        expected_price = float(data["expectedPrice"])
+        expected_price = float(data.get("expectedPrice", 0))
         profitable = predicted_price > expected_price
 
-        doc = {
+        property_doc = {
             "sellerName": data["sellerName"],
             "email": data["email"],
             "phone": data["phone"],
             "location": data["location"],
-            "features": {k: float(data[k]) for k in ["CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS",
-                                                     "RAD","TAX","PTRATIO","B","LSTAT"]},
+            "features": {k: float(data[k]) for k in required_fields[4:-1]},
             "expectedPrice": expected_price,
             "predictedPrice": predicted_price,
             "profitable": profitable
         }
 
-        properties_collection.insert_one(doc)
-        return jsonify({"message": "Property added successfully", "property": doc}), 200
+        properties_collection.insert_one(property_doc)
+        return jsonify({"message": "Property added successfully", "property": property_doc}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
-# Get all properties
 @app.route("/all", methods=["GET"])
 def get_properties():
-    if not properties_collection:
-        return jsonify({"error": "DB not connected"}), 503
     properties = list(properties_collection.find({}, {"_id": 0}))
     return jsonify(properties)
 
