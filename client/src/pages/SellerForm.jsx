@@ -23,7 +23,7 @@ export default function SellerForm() {
        const numericFields = ["CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS","RAD","TAX","PTRATIO","B","LSTAT","expectedPrice"];
     const payload = {...formData};
     numericFields.forEach(f => payload[f] = Number(payload[f]));
-      const res = await axios.post("https://realml-3.onrender.com/add", formData);
+      const res = await axios.post("https://realml-3.onrender.com/add",payload);
       alert(`Property added! Predicted Price: ${res.data.property.predictedPrice}`);
     } catch (err) {
       console.error(err);
