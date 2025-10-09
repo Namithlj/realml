@@ -12,38 +12,32 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-# -----------------------
 # MongoDB connection
-# -----------------------
 mongo_uri = os.environ.get("MONGO_URI")
-client = None
-db = None
-properties_collection = None
+client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
 
 try:
-    client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-    client.admin.command("ping")
-    db = client.realml
-    properties_collection = db.properties
+    client.server_info()  # Check connection
     print("✅ MongoDB connected successfully")
 except Exception as e:
     print("❌ MongoDB connection failed:", e)
 
-# -----------------------
-# Seed demo data (if DB connected)
-# -----------------------
+db = client.realml
+properties_collection = db.properties
+
+# Seed demo data
 def seed_demo_data():
-    if properties_collection and properties_collection.count_documents({}) == 0:
+    if properties_collection.count_documents({}) == 0:
         demo_locations = ["Bangalore", "Chennai", "Hyderabad", "Pune", "Mumbai"]
-        for i in range(5):
+        for _ in range(5):
             features = {f: round(uniform(0, 10), 2) for f in 
-                        ["CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS","RAD","TAX","PTRATIO","B","LSTAT"]}
-            features["CHAS"] = choice([0, 1])
+                ["CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS","RAD","TAX","PTRATIO","B","LSTAT"]}
+            features["CHAS"] = choice([0,1])
             expected = round(uniform(100000, 500000), 2)
             predicted = round(expected * uniform(0.8, 1.2), 2)
             doc = {
-                "sellerName": f"Demo Seller {i+1}",
-                "email": f"demo{i+1}@example.com",
+                "sellerName": f"Demo Seller {_+1}",
+                "email": f"demo{_+1}@example.com",
                 "phone": f"99999{randint(10000,99999)}",
                 "location": choice(demo_locations),
                 "features": features,
@@ -54,73 +48,63 @@ def seed_demo_data():
             properties_collection.insert_one(doc)
         print("✅ Demo properties inserted")
     else:
-        print("ℹ️ Database already contains properties or not connected; skipping seeding.")
+        print("ℹ️ Database already contains properties; skipping seeding.")
 
-if client:
-    seed_demo_data()
+seed_demo_data()
 
-# -----------------------
-# Load ML model safely
-# -----------------------
-model = None
+# Load ML model
 try:
-    model = joblib.load("ml/model.pkl")  # Ensure this path is correct
-    print("✅ ML model loaded")
+    model = joblib.load("ml/model.pkl")
+    print("✅ ML model loaded successfully")
 except Exception as e:
     print("❌ Failed to load ML model:", e)
-
-# -----------------------
-# Routes
-# -----------------------
+    model = None
 
 @app.route("/")
 def home():
     return "🏠 RealEstateML Flask Backend Running!"
 
-@app.route("/ping")
-def ping():
-    return "pong"
-
+# Add property
 @app.route("/add", methods=["POST"])
 def add_property():
-    if not properties_collection or not model:
-        return jsonify({"error": "Backend not fully ready (DB or ML model missing)"}), 503
+    if not model or not properties_collection:
+        return jsonify({"error": "Backend not ready"}), 503
 
     data = request.get_json()
-    required_fields = [
-        "sellerName", "email", "phone", "location",
-        "CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS",
-        "RAD","TAX","PTRATIO","B","LSTAT","expectedPrice"
-    ]
+    required_fields = ["sellerName","email","phone","location",
+                       "CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS",
+                       "RAD","TAX","PTRATIO","B","LSTAT","expectedPrice"]
 
     for f in required_fields:
         if f not in data:
             return jsonify({"error": f"Missing field: {f}"}), 400
 
     try:
-        # Convert features to floats
-        features = [float(data[f]) for f in ["CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS","RAD","TAX","PTRATIO","B","LSTAT"]]
+        features = [float(data[f]) for f in ["CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS",
+                                             "RAD","TAX","PTRATIO","B","LSTAT"]]
         predicted_price = float(model.predict([features])[0])
-        expected_price = float(data.get("expectedPrice", 0))
+        expected_price = float(data["expectedPrice"])
         profitable = predicted_price > expected_price
 
-        property_doc = {
+        doc = {
             "sellerName": data["sellerName"],
             "email": data["email"],
             "phone": data["phone"],
             "location": data["location"],
-            "features": {k: float(data[k]) for k in ["CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS","RAD","TAX","PTRATIO","B","LSTAT"]},
+            "features": {k: float(data[k]) for k in ["CRIM","ZN","INDUS","CHAS","NOX","RM","AGE","DIS",
+                                                     "RAD","TAX","PTRATIO","B","LSTAT"]},
             "expectedPrice": expected_price,
             "predictedPrice": predicted_price,
             "profitable": profitable
         }
 
-        properties_collection.insert_one(property_doc)
-        return jsonify({"message": "Property added successfully", "property": property_doc}), 200
+        properties_collection.insert_one(doc)
+        return jsonify({"message": "Property added successfully", "property": doc}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
+# Get all properties
 @app.route("/all", methods=["GET"])
 def get_properties():
     if not properties_collection:
@@ -128,9 +112,6 @@ def get_properties():
     properties = list(properties_collection.find({}, {"_id": 0}))
     return jsonify(properties)
 
-# -----------------------
-# Start server (Render-ready)
-# -----------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
